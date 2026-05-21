@@ -789,6 +789,7 @@ fun DashboardView(
     val logs by viewModel.scanningLogs.collectAsState()
     val currentVersion by viewModel.currentAppVersion.collectAsState()
     val isOptimizerCleaned by viewModel.isOptimizerCleaned.collectAsState()
+    val hasAllFilesPermission by viewModel.hasAllFilesPermission.collectAsState()
     val context = LocalContext.current
 
     var selectedCategoryIds = remember { mutableStateMapOf<String, Boolean>() }
@@ -830,7 +831,6 @@ fun DashboardView(
             }
         }
 
-        val hasAllFilesPermission by viewModel.hasAllFilesPermission.collectAsState()
         if (!hasAllFilesPermission) {
             item {
                 Card(
