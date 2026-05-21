@@ -785,12 +785,7 @@ fun MainAppScreen(
                         Button(
                             onClick = {
                                 showCacheCleanConfirmDialog = false
-                                // Create synthetic clean state
-                                val sampleCategories = listOf(
-                                    TrashCategory("system_cache", "Cache do Sistema", "Arquivos temporários criados pelo SO", 1240 * 1024 * 1024L, "1.24 GB"),
-                                    TrashCategory("apps_cache", "Cache de Aplicativos", "Imagens, feeds e downloads locais temporários", 2150 * 1024 * 1024L, "2.15 GB")
-                                )
-                                optimizerViewModel.performClearing(sampleCategories)
+                                optimizerViewModel.performFastDirectCleanup()
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = PrimaryTeal)
                         ) {

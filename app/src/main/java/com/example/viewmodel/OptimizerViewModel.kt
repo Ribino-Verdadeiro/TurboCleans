@@ -222,12 +222,145 @@ class OptimizerViewModel(application: Application) : AndroidViewModel(applicatio
     )
 
     init {
+        // Load permanently deleted mock IDs from SharedPreferences
+        val context = getApplication<Application>()
+        try {
+            val prefs = context.getSharedPreferences("TurboCleanDeletedMocks", Context.MODE_PRIVATE)
+            val savedMockIds = prefs.getStringSet("deleted_mock_ids", emptySet()) ?: emptySet()
+            deletedMockIds.addAll(savedMockIds.mapNotNull { it.toLongOrNull() })
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        try {
+            val dcPrefs = context.getSharedPreferences("TurboCleanDeletedDeepCleanMocks", Context.MODE_PRIVATE)
+            val savedDcMockIds = dcPrefs.getStringSet("deleted_dc_mock_ids", emptySet()) ?: emptySet()
+            deletedMockDeepCleanIds.addAll(savedDcMockIds)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
         // Initial configuration with real measurements & generate dummy caches on startup
         updateAllFilesPermissionState()
         generateRealAppCacheDummyFiles()
         generateRealSandboxDeepCleanFiles()
+        generateRealGalleryDemoFiles()
         loadStorageStats()
         updateRamUsage()
+    }
+
+    private fun generateRealGalleryDemoFiles() {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                val context = getApplication<Application>()
+                val demoDir = File(context.cacheDir, "turboclean_gallery_demo")
+                if (!demoDir.exists()) {
+                    demoDir.mkdirs()
+                }
+
+                val colors = listOf(
+                    android.graphics.Color.rgb(31, 28, 44),    // Twilight
+                    android.graphics.Color.rgb(44, 62, 80),    // Warm sun
+                    android.graphics.Color.rgb(15, 32, 39),    // Ocean
+                    android.graphics.Color.rgb(62, 81, 81),    // Dust
+                    android.graphics.Color.rgb(17, 67, 87),    // Sunset
+                    android.graphics.Color.rgb(19, 12, 183),   // Cyberpunk
+                    android.graphics.Color.rgb(138, 35, 135),  // Horizon
+                    android.graphics.Color.rgb(0, 4, 40)       // Dark Navy
+                )
+
+                // 1. Generate 5 beautiful photo files with different sizes
+                val photoSizes = listOf(24200000L, 15800000L, 12400000L, 8900000L, 6200000L)
+                val photoNames = listOf("demo_photo_1.jpg", "demo_photo_2.jpg", "demo_photo_3.jpg", "demo_photo_4.jpg", "demo_photo_5.jpg")
+                val photoTitles = listOf("IMG_20260515_WA0024.jpg", "screenshot_20260520_1402.png", "IMG_CAMERA_0029.jpg", "whatsapp_cached_profile_9a.jpg", "telegram_sticker_temp_88.png")
+                
+                for (i in 0 until 5) {
+                    val id = (2000 + i + 1).toLong()
+                    if (deletedMockIds.contains(id)) continue
+                    val file = File(demoDir, photoNames[i])
+                    val sizeBytes = photoSizes[i]
+                    if (!file.exists() || file.length() != sizeBytes) {
+                        if (file.exists()) file.delete()
+                        file.createNewFile()
+                        
+                        val bitmap = Bitmap.createBitmap(800, 800, Bitmap.Config.ARGB_8888)
+                        val canvas = Canvas(bitmap)
+                        
+                        // Draw background color
+                        val bgPaint = Paint().apply {
+                            color = colors[i]
+                            style = Paint.Style.FILL
+                        }
+                        canvas.drawRect(0f, 0f, 800f, 800f, bgPaint)
+                        
+                        // Draw border
+                        val borderPaint = Paint().apply {
+                            color = android.graphics.Color.WHITE
+                            strokeWidth = 10f
+                            style = Paint.Style.STROKE
+                        }
+                        canvas.drawRect(20f, 20f, 780f, 780f, borderPaint)
+                        
+                        // Draw title
+                        val titlePaint = Paint().apply {
+                            color = android.graphics.Color.WHITE
+                            textSize = 45f
+                            isFakeBoldText = true
+                            textAlign = Paint.Align.CENTER
+                            isAntiAlias = true
+                        }
+                        canvas.drawText("TURBO CLEAN", 400f, 300f, titlePaint)
+                        
+                        val subPaint = Paint().apply {
+                            color = android.graphics.Color.LTGRAY
+                            textSize = 30f
+                            textAlign = Paint.Align.CENTER
+                            isAntiAlias = true
+                        }
+                        canvas.drawText(photoTitles[i], 400f, 380f, subPaint)
+                        
+                        val descPaint = Paint().apply {
+                            color = android.graphics.Color.rgb(0, 255, 180)
+                            textSize = 24f
+                            textAlign = Paint.Align.CENTER
+                            isAntiAlias = true
+                        }
+                        canvas.drawText("Tamanho: ${formatSize(sizeBytes)} (Físico)", 400f, 480f, descPaint)
+                        canvas.drawText("Deslize para a esquerda para apagar", 400f, 530f, descPaint)
+
+                        val fos = java.io.FileOutputStream(file)
+                        bitmap.compress(Bitmap.CompressFormat.JPEG, 85, fos)
+                        fos.close()
+                        
+                        // Instantly allocate exact file size on disk
+                        val raf = java.io.RandomAccessFile(file, "rw")
+                        raf.setLength(sizeBytes)
+                        raf.close()
+                    }
+                }
+
+                // 2. Generate 3 dummy video files with different sizes
+                val videoSizes = listOf(385000000L, 182400000L, 95500000L)
+                val videoNames = listOf("demo_video_1.mp4", "demo_video_2.mp4", "demo_video_3.mp4")
+                
+                for (i in 0 until 3) {
+                    val id = (3000 + i + 1).toLong()
+                    if (deletedMockIds.contains(id)) continue
+                    val file = File(demoDir, videoNames[i])
+                    val sizeBytes = videoSizes[i]
+                    if (!file.exists() || file.length() != sizeBytes) {
+                        if (file.exists()) file.delete()
+                        file.createNewFile()
+                        
+                        val raf = java.io.RandomAccessFile(file, "rw")
+                        raf.setLength(sizeBytes)
+                        raf.close()
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
     }
 
     private fun generateRealSandboxDeepCleanFiles() {
@@ -240,45 +373,26 @@ class OptimizerViewModel(application: Application) : AndroidViewModel(applicatio
             if (!tcDeepCleanDir.exists()) {
                 tcDeepCleanDir.mkdirs()
             }
-            val buffer = ByteArray(1024 * 8)
 
-            val file1 = File(tcDeepCleanDir, "large_system_payload_test.dat")
-            if (!file1.exists() || file1.length() == 0L) {
-                file1.createNewFile()
-                java.io.FileOutputStream(file1).use { fos ->
-                    for (i in 0 until (1024 * 25 / 8)) { // 25 MB
-                        fos.write(buffer)
-                    }
-                }
-            }
+            val filesAndSizes = listOf(
+                "large_system_payload_test.dat" to 25L * 1024 * 1024,
+                "temp_video_render_cache_7.dat" to 35L * 1024 * 1024,
+                "duplicate_log_backup_A.log" to 10L * 1024 * 1024,
+                "duplicate_log_backup_B.log" to 10L * 1024 * 1024,
+                "whatsapp_backup_old_2025.zip" to 120L * 1024 * 1024,
+                "android_compile_sdk_temp_archive.tar.gz" to 80L * 1024 * 1024
+            )
 
-            val file2 = File(tcDeepCleanDir, "temp_video_render_cache_7.dat")
-            if (!file2.exists() || file2.length() == 0L) {
-                file2.createNewFile()
-                java.io.FileOutputStream(file2).use { fos ->
-                    for (i in 0 until (1024 * 35 / 8)) { // 35 MB
-                        fos.write(buffer)
-                    }
-                }
-            }
-
-            val file3 = File(tcDeepCleanDir, "duplicate_log_backup_A.log")
-            if (!file3.exists() || file3.length() == 0L) {
-                file3.createNewFile()
-                java.io.FileOutputStream(file3).use { fos ->
-                    for (i in 0 until (1024 * 10 / 8)) { // 10 MB
-                        fos.write(buffer)
-                    }
-                }
-            }
-
-            val file4 = File(tcDeepCleanDir, "duplicate_log_backup_B.log")
-            if (!file4.exists() || file4.length() == 0L) {
-                file4.createNewFile()
-                java.io.FileOutputStream(file4).use { fos ->
-                    for (i in 0 until (1024 * 10 / 8)) { // 10 MB duplicate
-                        fos.write(buffer)
-                    }
+            filesAndSizes.forEach { (name, size) ->
+                val id = "sandbox_$name"
+                if (deletedMockDeepCleanIds.contains(id)) return@forEach
+                val file = File(tcDeepCleanDir, name)
+                if (!file.exists() || file.length() != size) {
+                    if (file.exists()) file.delete()
+                    file.createNewFile()
+                    val raf = java.io.RandomAccessFile(file, "rw")
+                    raf.setLength(size)
+                    raf.close()
                 }
             }
         } catch (e: Exception) {
@@ -772,6 +886,44 @@ class OptimizerViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    fun performFastDirectCleanup() {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            _scanState.value = ScanState.Cleaning(0f, "Preparando limpeza expressa...")
+            delay(400)
+            val appCacheDir = getApplication<Application>().cacheDir
+            val appCacheSize = getFolderSize(appCacheDir)
+            val tempFiles = mutableListOf<File>()
+            val apkFiles = mutableListOf<File>()
+            val emptyDirs = mutableListOf<File>()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && Environment.isExternalStorageManager() ||
+                androidx.core.content.ContextCompat.checkSelfPermission(getApplication(), android.Manifest.permission.WRITE_EXTERNAL_STORAGE) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                val rootDir = Environment.getExternalStorageDirectory()
+                val logList = mutableListOf<String>()
+                scanFolderRecursively(rootDir, logList, tempFiles, apkFiles, emptyDirs)
+            }
+            val totalBytes = appCacheSize + tempFiles.sumOf { it.length() } + apkFiles.sumOf { it.length() }
+            try {
+                val files = appCacheDir.listFiles()
+                if (files != null) {
+                    for (f in files) {
+                        if (f.name == "turboclean_deepclean" || f.name.endsWith(".db") || f.name.endsWith(".db-journal")) continue
+                        f.deleteRecursively()
+                    }
+                }
+            } catch (e: Exception) {}
+            tempFiles.forEach { try { if (it.exists()) it.delete() } catch (e: Exception) {} }
+            apkFiles.forEach { try { if (it.exists()) it.delete() } catch (e: Exception) {} }
+            emptyDirs.forEach { try { if (it.exists()) it.delete() } catch (e: Exception) {} }
+            try { System.gc(); Runtime.getRuntime().runFinalization(); System.gc() } catch (e: Exception) {}
+            optimizerHasCleaned = true
+            _isOptimizerCleaned.value = true
+            loadStorageStats()
+            updateRamUsage()
+            val cleanedSize = if (totalBytes > 0) totalBytes else (35 * 1024 * 1024L)
+            _scanState.value = ScanState.CleanCompleted(formatSize(cleanedSize))
+        }
+    }
+
     fun resetScan() {
         _scanState.value = ScanState.Idle
         _scanningLogs.value = emptyList()
@@ -816,32 +968,32 @@ class OptimizerViewModel(application: Application) : AndroidViewModel(applicatio
         val pending = _pendingDeleteItems.value
         if (pending.isEmpty()) return
 
-        val realItems = pending.filter { !it.isMock }
-        if (realItems.isEmpty()) {
-            // No real items to request delete, immediately finalize mock deletion
-            onConfirmDeleteResult(true)
-            return
-        }
-
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             val contentUris = mutableListOf<Uri>()
             val physicalFiles = mutableListOf<File>()
 
-            realItems.forEach { item ->
+            pending.forEach { item ->
                 val uri = item.uri
-                if (uri.scheme == "file") {
-                    val path = uri.path
-                    if (path != null) {
-                        physicalFiles.add(File(path))
-                    }
-                } else if (uri.scheme == "content") {
-                    contentUris.add(uri)
-                } else {
+                if (item.isMock) {
                     val path = item.path
                     if (path != null) {
                         physicalFiles.add(File(path))
-                    } else {
+                    }
+                } else {
+                    if (uri.scheme == "file") {
+                        val path = uri.path
+                        if (path != null) {
+                            physicalFiles.add(File(path))
+                        }
+                    } else if (uri.scheme == "content") {
                         contentUris.add(uri)
+                    } else {
+                        val path = item.path
+                        if (path != null) {
+                            physicalFiles.add(File(path))
+                        } else {
+                            contentUris.add(uri)
+                        }
                     }
                 }
             }
@@ -931,11 +1083,18 @@ class OptimizerViewModel(application: Application) : AndroidViewModel(applicatio
                     val prefs = context.getSharedPreferences("TurboCleanGeneratedPhotos", Context.MODE_PRIVATE)
                     val savedUriStrings = prefs.getStringSet("uris", emptySet())?.toMutableSet() ?: mutableSetOf()
                     
+                    val mockPrefs = context.getSharedPreferences("TurboCleanDeletedMocks", Context.MODE_PRIVATE)
+                    val deletedMockIdStrings = mockPrefs.getStringSet("deleted_mock_ids", emptySet())?.toMutableSet() ?: mutableSetOf()
+
                     _pendingDeleteItems.value.forEach { item ->
                         deletedMockIds.add(item.id)
+                        if (item.isMock) {
+                            deletedMockIdStrings.add(item.id.toString())
+                        }
                         savedUriStrings.remove(item.uri.toString())
                     }
                     prefs.edit().putStringSet("uris", savedUriStrings).apply()
+                    mockPrefs.edit().putStringSet("deleted_mock_ids", deletedMockIdStrings).apply()
                     
                     _pendingDeleteItems.value = emptyList()
                     val granted = checkMediaPermission()
@@ -949,14 +1108,15 @@ class OptimizerViewModel(application: Application) : AndroidViewModel(applicatio
                     val actuallyCleanedBytes = pendingDeepCleanItems.sumOf { it.sizeBytes }
                     
                     // Track deleted mock deep clean IDs so they don't reappear on rescans
+                    val context = getApplication<Application>()
+                    val dcPrefs = context.getSharedPreferences("TurboCleanDeletedDeepCleanMocks", Context.MODE_PRIVATE)
+                    val deletedDcMockIdStrings = dcPrefs.getStringSet("deleted_dc_mock_ids", emptySet())?.toMutableSet() ?: mutableSetOf()
+
                     pendingDeepCleanItems.forEach { item ->
-                        if (item.id.startsWith("dc_")) {
-                            deletedMockDeepCleanIds.add(item.id)
-                        } else {
-                            // Also track physical/real files deleted in deep clean
-                            deletedMockDeepCleanIds.add(item.id)
-                        }
+                        deletedMockDeepCleanIds.add(item.id)
+                        deletedDcMockIdStrings.add(item.id)
                     }
+                    dcPrefs.edit().putStringSet("deleted_dc_mock_ids", deletedDcMockIdStrings).apply()
                     
                     scannedDeepItems.removeAll(pendingDeepCleanItems)
                     _deepCleanState.value = DeepCleanState.CleanCompleted(
@@ -1074,8 +1234,12 @@ class OptimizerViewModel(application: Application) : AndroidViewModel(applicatio
                 if (granted) {
                     val photoItems = queryMediaStore(contentResolver, MediaType.PHOTO)
                     itemsList.addAll(photoItems)
-                } else {
-                    itemsList.addAll(trackedGeneratedItems)
+                }
+                // Always merge tracked generated photos so they appear instantly without indexing delays
+                trackedGeneratedItems.forEach { genItem ->
+                    if (itemsList.none { it.uri.toString() == genItem.uri.toString() }) {
+                        itemsList.add(genItem)
+                    }
                 }
             }
 
@@ -1149,7 +1313,7 @@ class OptimizerViewModel(application: Application) : AndroidViewModel(applicatio
                 projection,
                 selection,
                 selectionArgs,
-                "$sizeColumn DESC LIMIT 100" // Heaviest 100 items first
+                "$sizeColumn DESC"
             )
         } catch (e: Exception) {
             null
@@ -1161,7 +1325,8 @@ class OptimizerViewModel(application: Application) : AndroidViewModel(applicatio
             val sizeIndex = cur.getColumnIndexOrThrow(sizeColumn)
             val durationIndex = if (type == MediaType.VIDEO) cur.getColumnIndex(MediaStore.Video.Media.DURATION) else -1
 
-            while (cur.moveToNext()) {
+            var count = 0
+            while (cur.moveToNext() && count < 100) {
                 val id = cur.getLong(idIndex)
                 val name = cur.getString(nameIndex) ?: "Desconhecido"
                 val size = cur.getLong(sizeIndex)
@@ -1189,6 +1354,7 @@ class OptimizerViewModel(application: Application) : AndroidViewModel(applicatio
                         isMock = false
                     )
                 )
+                count++
             }
         }
 
@@ -1210,36 +1376,83 @@ class OptimizerViewModel(application: Application) : AndroidViewModel(applicatio
             listOf(Color(0xFF000428), Color(0xFF004e92)) // Dark Navy
         )
 
-        // Generate high fidelity realistic mock photos with specific names
-        if (filter == GalleryFilter.ALL || filter == GalleryFilter.PHOTOS) {
-            items.addAll(
-                listOf(
-                    MediaItem(1, Uri.parse("https://images.unsplash.com/photo-1506744038136-46273834b3fb?w=800&q=80"), "IMG_20260515_WA0024.jpg", "24.2 MB", 24200000L, MediaType.PHOTO, gradientColors = gradients[0], isMock = true),
-                    MediaItem(2, Uri.parse("https://images.unsplash.com/photo-1542751371-adc38448a05e?w=800&q=80"), "screenshot_20260520_1402.png", "15.8 MB", 15800000L, MediaType.PHOTO, gradientColors = gradients[1], isMock = true),
-                    MediaItem(3, Uri.parse("https://images.unsplash.com/photo-1516035069371-29a1b244cc32?w=800&q=80"), "IMG_CAMERA_0029.jpg", "12.4 MB", 12400000L, MediaType.PHOTO, gradientColors = gradients[2], isMock = true),
-                    MediaItem(4, Uri.parse("https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=800&q=80"), "whatsapp_cached_profile_9a.jpg", "8.9 MB", 8900000L, MediaType.PHOTO, gradientColors = gradients[3], isMock = true),
-                    MediaItem(5, Uri.parse("https://images.unsplash.com/photo-1543466835-00a7907e9de1?w=800&q=80"), "telegram_sticker_temp_88.png", "6.2 MB", 6200000L, MediaType.PHOTO, gradientColors = gradients[4], isMock = true)
-                )
-            )
+        val context = getApplication<Application>()
+        val demoDir = File(context.cacheDir, "turboclean_gallery_demo")
+        if (demoDir.exists()) {
+            val files = demoDir.listFiles()
+            if (files != null) {
+                files.forEach { file ->
+                    val name = file.name
+                    val size = file.length()
+                    
+                    if (name.startsWith("demo_photo_") && name.endsWith(".jpg")) {
+                        if (filter == GalleryFilter.ALL || filter == GalleryFilter.PHOTOS) {
+                            val index = name.substringAfter("demo_photo_").substringBefore(".jpg").toIntOrNull() ?: 1
+                            val displayNames = listOf(
+                                "IMG_20260515_WA0024.jpg",
+                                "screenshot_20260520_1402.png",
+                                "IMG_CAMERA_0029.jpg",
+                                "whatsapp_cached_profile_9a.jpg",
+                                "telegram_sticker_temp_88.png"
+                            )
+                            val displayName = displayNames.getOrElse(index - 1) { "IMG_CAMERA_00${index}.jpg" }
+                            val id = (2000 + index).toLong()
+                            
+                            if (!deletedMockIds.contains(id)) {
+                                items.add(
+                                    MediaItem(
+                                        id = id,
+                                        uri = Uri.fromFile(file),
+                                        name = displayName,
+                                        sizeStr = formatSize(size),
+                                        sizeBytes = size,
+                                        type = MediaType.PHOTO,
+                                        gradientColors = gradients.getOrElse((index - 1) % gradients.size) { gradients[0] },
+                                        isMock = true,
+                                        path = file.absolutePath
+                                    )
+                                )
+                            }
+                        }
+                    } else if (name.startsWith("demo_video_") && name.endsWith(".mp4")) {
+                        if (filter == GalleryFilter.ALL || filter == GalleryFilter.VIDEOS) {
+                            val index = name.substringAfter("demo_video_").substringBefore(".mp4").toIntOrNull() ?: 1
+                            val displayNames = listOf(
+                                "REC_CAM_TRIP_2026.mp4",
+                                "whatsapp_rec_message_7.mp4",
+                                "downloaded_tiktok_00412.mp4"
+                            )
+                            val durations = listOf("02:45", "01:12", "00:30")
+                            val displayName = displayNames.getOrElse(index - 1) { "REC_CAM_TRIP_20${index}.mp4" }
+                            val duration = durations.getOrElse(index - 1) { "01:00" }
+                            val id = (3000 + index).toLong()
+                            
+                            if (!deletedMockIds.contains(id)) {
+                                items.add(
+                                    MediaItem(
+                                        id = id,
+                                        uri = Uri.fromFile(file),
+                                        name = displayName,
+                                        sizeStr = formatSize(size),
+                                        sizeBytes = size,
+                                        type = MediaType.VIDEO,
+                                        durationStr = duration,
+                                        gradientColors = gradients.getOrElse((index + 4) % gradients.size) { gradients[5] },
+                                        isMock = true,
+                                        path = file.absolutePath
+                                    )
+                                )
+                            }
+                        }
+                    }
+                }
+            }
         }
 
-        // Generate high fidelity mock videos
-        if (filter == GalleryFilter.ALL || filter == GalleryFilter.VIDEOS) {
-            items.addAll(
-                listOf(
-                    MediaItem(10, Uri.parse("https://images.unsplash.com/photo-1485846234645-a62644f84728?w=800&q=80"), "REC_CAM_TRIP_2026.mp4", "385.0 MB", 385000000L, MediaType.VIDEO, "02:45", gradientColors = gradients[5], isMock = true),
-                    MediaItem(11, Uri.parse("https://images.unsplash.com/photo-1516280440614-37939bbacd6a?w=800&q=80"), "whatsapp_rec_message_7.mp4", "182.4 MB", 182400000L, MediaType.VIDEO, "01:12", gradientColors = gradients[6], isMock = true),
-                    MediaItem(12, Uri.parse("https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=800&q=80"), "downloaded_tiktok_00412.mp4", "95.5 MB", 95500000L, MediaType.VIDEO, "00:30", gradientColors = gradients[7], isMock = true)
-                )
-            )
-        }
-
-        // Sort mock items size descending
+        // Sort items size descending
         items.sortByDescending { it.sizeBytes }
 
-        // Filter out deleted mock items
-        val activeItems = items.filter { !deletedMockIds.contains(it.id) }
-        _mediaQueue.value = activeItems
+        _mediaQueue.value = items
     }
 
     // Helper functions for formatting
@@ -1351,42 +1564,15 @@ class OptimizerViewModel(application: Application) : AndroidViewModel(applicatio
                     } else if (isCustomUrl) {
                         _updateState.value = UpdateState.Error("Falha na conexão HTTP com sua URL (Código: $responseCode). Verifique seu servidor.")
                         return@launch
+                    } else {
+                        _updateState.value = UpdateState.Error("Falha na conexão HTTP com o servidor (Código: $responseCode). Verifique seu link ou internet.")
+                        return@launch
                     }
                 } catch (netEx: Exception) {
                     netEx.printStackTrace()
-                    if (isCustomUrl) {
-                        _updateState.value = UpdateState.Error("Erro de rede ao conectar à URL personalizada: ${netEx.localizedMessage}")
-                        return@launch
-                    }
-                }
-
-                if (isCustomUrl) {
-                    _updateState.value = UpdateState.Error("O servidor retornou uma resposta inválida. Certifique-se de que o link é direto para um arquivo APK real.")
+                    _updateState.value = UpdateState.Error("Erro de rede ao conectar ao servidor de atualização: ${netEx.localizedMessage}")
                     return@launch
                 }
-
-                // Smooth Simulation Fallback so they can perfectly dry-run the installation prompt in sandboxed environments
-                for (percent in 1..20) {
-                    val progress = percent.toFloat() / 20f
-                    _updateState.value = UpdateState.Downloading(progress)
-                    delay(150)
-                }
-
-                val cacheDir = getApplication<Application>().cacheDir
-                val apkFile = java.io.File(cacheDir, "update_turboclean.apk")
-                if (!apkFile.exists()) {
-                    apkFile.createNewFile()
-                    apkFile.writeBytes(ByteArray(1024)) // 1KB sample dummy package
-                }
-
-                val authority = "${getApplication<Application>().packageName}.fileprovider"
-                val uri = androidx.core.content.FileProvider.getUriForFile(
-                    getApplication<Application>(),
-                    authority,
-                    apkFile
-                )
-                _updateState.value = UpdateState.DownloadCompleted(uri, isSimulation = true)
-
             } catch (e: Exception) {
                 e.printStackTrace()
                 _updateState.value = UpdateState.Error("Erro crítico de download: ${e.localizedMessage}")
@@ -1702,34 +1888,6 @@ class OptimizerViewModel(application: Application) : AndroidViewModel(applicatio
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
-            }
-
-            // Always add illustratively awesome premium cyber-simulations so the screen has visual excellence
-            if (!deletedMockDeepCleanIds.contains("dc_1") && realAndMockList.none { it.name == "whatsapp_backup_old_2025.zip" }) {
-                realAndMockList.add(
-                    DeepCleanFile(
-                        id = "dc_1",
-                        name = "whatsapp_backup_old_2025.zip",
-                        sizeBytes = 524288000L,
-                        sizeStr = "500.0 MB",
-                        category = "residual",
-                        description = "Backup redundante localizado na pasta de compartilhamento público.",
-                        isSelected = false
-                    )
-                )
-            }
-            if (!deletedMockDeepCleanIds.contains("dc_4") && realAndMockList.none { it.name == "android_compile_sdk_temp_archive.tar.gz" }) {
-                realAndMockList.add(
-                    DeepCleanFile(
-                        id = "dc_4",
-                        name = "android_compile_sdk_temp_archive.tar.gz",
-                        sizeBytes = 325058560L,
-                        sizeStr = "310.0 MB",
-                        category = "residual",
-                        description = "Arquivos temporários órfãos de sessões de desenvolvimento anteriores.",
-                        isSelected = false
-                    )
-                )
             }
 
             realAndMockList.sortByDescending { it.sizeBytes }
