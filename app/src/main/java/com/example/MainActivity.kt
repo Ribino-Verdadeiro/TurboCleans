@@ -31,6 +31,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.rememberMultiplePermissionsState
 import com.example.model.MediaItem
@@ -99,6 +102,19 @@ fun MainAppScreen(
         }
     }
 
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                optimizerViewModel.updateAllFilesPermissionState()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
     // Notify VM when permission state updates
     LaunchedEffect(anyMediaGranted) {
         optimizerViewModel.setMediaPermissionGranted(anyMediaGranted)
@@ -109,8 +125,10 @@ fun MainAppScreen(
     ) { result ->
         if (result.resultCode == android.app.Activity.RESULT_OK) {
             Toast.makeText(context, "Mídia apagada com sucesso!", Toast.LENGTH_SHORT).show()
+            optimizerViewModel.onConfirmDeleteResult(true)
         } else {
             Toast.makeText(context, "Exclusão cancelada ou não permitida", Toast.LENGTH_SHORT).show()
+            optimizerViewModel.onConfirmDeleteResult(false)
         }
     }
 
@@ -809,6 +827,78 @@ fun DashboardView(
                     title = "MEMÓRIA RAM",
                     sizeDp = 136
                 )
+            }
+        }
+
+        val hasAllFilesPermission by viewModel.hasAllFilesPermission.collectAsState()
+        if (!hasAllFilesPermission) {
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = CardBackground),
+                    shape = RoundedCornerShape(20.dp),
+                    border = BorderStroke(1.dp, WarningOrange.copy(alpha = 0.4f))
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Warning,
+                                contentDescription = null,
+                                tint = WarningOrange,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Acesso de Administrador Necessário",
+                                fontWeight = FontWeight.Bold,
+                                color = TextPrimary,
+                                fontSize = 14.sp
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "Para varrer e limpar arquivos inúteis reais fora do sandbox do aplicativo (como pastas temporárias, logs obsoletos e instaladores APK em Downloads), ative a permissão especial de Acesso Completo ao Armazenamento.",
+                            color = TextSecondary,
+                            fontSize = 11.sp,
+                            lineHeight = 15.sp
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Button(
+                            onClick = {
+                                try {
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                                        val intent = android.content.Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                                            data = android.net.Uri.parse("package:${context.packageName}")
+                                        }
+                                        context.startActivity(intent)
+                                    } else {
+                                        val intent = android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                            data = android.net.Uri.parse("package:${context.packageName}")
+                                        }
+                                        context.startActivity(intent)
+                                    }
+                                } catch (e: Exception) {
+                                    val intent = android.content.Intent(android.provider.Settings.ACTION_SETTINGS)
+                                    context.startActivity(intent)
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = WarningOrange),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                "CONCEDER ACESSO COMPLETO DE ARQUIVOS",
+                                color = DarkBackground,
+                                fontWeight = FontWeight.Black,
+                                fontSize = 10.sp
+                            )
+                        }
+                    }
+                }
             }
         }
 
@@ -1670,6 +1760,7 @@ fun SwipeGalleryCleaner(
 ) {
     val itemsQueue by viewModel.mediaQueue.collectAsState()
     val filterType by viewModel.currentFilter.collectAsState()
+    val pendingDeleteItems by viewModel.pendingDeleteItems.collectAsState()
 
     val savedCount by viewModel.savedCount.collectAsState()
     val deletedCount by viewModel.deletedCount.collectAsState()
@@ -1737,8 +1828,164 @@ fun SwipeGalleryCleaner(
                     onSwipeRight = { viewModel.swipeRight(it) },
                     modifier = Modifier.padding(12.dp)
                 )
+
+                if (pendingDeleteItems.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(bottom = 24.dp)
+                            .fillMaxWidth(0.95f)
+                            .background(CardBackground.copy(alpha = 0.95f), RoundedCornerShape(16.dp))
+                            .border(1.dp, PrimaryTeal, RoundedCornerShape(16.dp))
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                            Text(
+                                text = "${pendingDeleteItems.size} itens selecionados",
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp
+                            )
+                            val totalPendingBytes = pendingDeleteItems.sumOf { it.sizeBytes }
+                            val totalPendingSizeStr = if (totalPendingBytes <= 0L) "0 B" else {
+                                val units = arrayOf("B", "KB", "MB", "GB", "TB")
+                                val digitGroups = (Math.log10(totalPendingBytes.toDouble()) / Math.log10(1024.0)).toInt()
+                                String.format("%.1f %s", totalPendingBytes / Math.pow(1024.0, digitGroups.toDouble()), units[digitGroups])
+                            }
+                            Text(
+                                text = "Total: $totalPendingSizeStr",
+                                color = TextSecondary,
+                                fontSize = 11.sp
+                            )
+                        }
+                        
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            TextButton(
+                                onClick = { viewModel.rollbackPendingDeletions() },
+                                colors = ButtonDefaults.textButtonColors(contentColor = WarningOrange),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Undo,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(2.dp))
+                                Text("Desfazer", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                            }
+                            
+                            Button(
+                                onClick = { viewModel.commitPendingDeletions() },
+                                colors = ButtonDefaults.buttonColors(containerColor = AccentRed),
+                                shape = RoundedCornerShape(8.dp),
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Delete,
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(2.dp))
+                                Text("Excluir", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                            }
+                        }
+                    }
+                }
+            } else if (pendingDeleteItems.isNotEmpty()) {
+                // Dedicated full queue confirmation panel
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(24.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(72.dp)
+                            .background(WarningOrange.copy(alpha = 0.12f), CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Warning,
+                            contentDescription = null,
+                            tint = WarningOrange,
+                            modifier = Modifier.size(38.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = "Confirme a Remoção!",
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Black,
+                        color = Color.White
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    val totalPendingBytes = pendingDeleteItems.sumOf { it.sizeBytes }
+                    val totalPendingSizeStr = if (totalPendingBytes <= 0L) "0 B" else {
+                        val units = arrayOf("B", "KB", "MB", "GB", "TB")
+                        val digitGroups = (Math.log10(totalPendingBytes.toDouble()) / Math.log10(1024.0)).toInt()
+                        String.format("%.1f %s", totalPendingBytes / Math.pow(1024.0, digitGroups.toDouble()), units[digitGroups])
+                    }
+                    Text(
+                        text = "Você selecionou ${pendingDeleteItems.size} arquivos ($totalPendingSizeStr) para exclusão.",
+                        fontSize = 12.sp,
+                        color = TextSecondary,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(horizontal = 16.dp)
+                    )
+                    Spacer(modifier = Modifier.height(24.dp))
+
+                    Button(
+                        onClick = { viewModel.commitPendingDeletions() },
+                        colors = ButtonDefaults.buttonColors(containerColor = AccentRed),
+                        modifier = Modifier.fillMaxWidth().height(50.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, AccentRed.copy(alpha = 0.5f))
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Delete,
+                            contentDescription = null,
+                            tint = Color.White
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Confirmar Exclusão de ${pendingDeleteItems.size} itens",
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    OutlinedButton(
+                        onClick = { viewModel.rollbackPendingDeletions() },
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = WarningOrange),
+                        modifier = Modifier.fillMaxWidth().height(50.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, WarningOrange.copy(alpha = 0.5f))
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Undo,
+                            contentDescription = null,
+                            tint = WarningOrange
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Desfazer e Devolver à Fila",
+                            color = WarningOrange,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
             } else {
-                // Completed empty state
+                // Completed empty state (both queues empty)
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center,
