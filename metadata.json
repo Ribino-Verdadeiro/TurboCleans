@@ -1,0 +1,6 @@
+{
+  "name": "Turbo Clean",
+  "description": "Aplicativo completo de otimização de cache, lixo do sistema e limpeza inteligente de fotos e vídeos em formato de cartas arrastáveis (Tinder style).",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
