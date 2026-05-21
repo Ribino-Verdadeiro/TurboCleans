@@ -12,14 +12,19 @@ import android.provider.MediaStore
 import androidx.annotation.RequiresApi
 import androidx.compose.ui.graphics.Color
 import androidx.lifecycle.AndroidViewModel
+import android.app.PendingIntent
 import androidx.lifecycle.viewModelScope
 import com.example.model.MediaItem
 import com.example.model.MediaType
+import com.example.model.defaultGradient
 import com.example.model.TrashCategory
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -133,6 +138,9 @@ class OptimizerViewModel(application: Application) : AndroidViewModel(applicatio
 
     private val _hasMediaPermission = MutableStateFlow(false)
     val hasMediaPermission: StateFlow<Boolean> = _hasMediaPermission.asStateFlow()
+
+    private val _deletePendingIntent = MutableSharedFlow<PendingIntent>()
+    val deletePendingIntent: SharedFlow<PendingIntent> = _deletePendingIntent.asSharedFlow()
 
     // Lists of items swiped (archived/deleted in this session)
     private val _savedCount = MutableStateFlow(0)
@@ -459,18 +467,35 @@ class OptimizerViewModel(application: Application) : AndroidViewModel(applicatio
 
     private suspend fun deleteMediaFile(item: MediaItem) {
         // Attempt actual deletion if permitted and real
-        if (!_hasMediaPermission.value || item.id < 1000L) {
+        if (!_hasMediaPermission.value || item.isMock) {
             // Simulated deletion
             return
         }
 
         try {
             val contentResolver = getApplication<Application>().contentResolver
-            contentResolver.delete(item.uri, null, null)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                // Android 11+
+                val pendingIntent = MediaStore.createDeleteRequest(contentResolver, listOf(item.uri))
+                _deletePendingIntent.emit(pendingIntent)
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                // Android 10
+                try {
+                    contentResolver.delete(item.uri, null, null)
+                } catch (securityException: SecurityException) {
+                    val recoverableSecurityException = securityException as? android.app.RecoverableSecurityException
+                    if (recoverableSecurityException != null) {
+                        val pendingIntent = recoverableSecurityException.userAction.actionIntent
+                        _deletePendingIntent.emit(pendingIntent)
+                    } else {
+                        throw securityException
+                    }
+                }
+            } else {
+                // Android 9 and below
+                contentResolver.delete(item.uri, null, null)
+            }
         } catch (e: Exception) {
-            // Under Android 10+ (API 29+), directly deleting a media file belonging to other apps (or sometimes ours without system prompt)
-            // throws a RecoverableSecurityException or security prompt. We catch, log, and gracefully handle
-            // by removing from state so the queue remains smooth, flawless, and non-blocking.
             e.printStackTrace()
         }
     }
@@ -521,7 +546,7 @@ class OptimizerViewModel(application: Application) : AndroidViewModel(applicatio
             idColumn = MediaStore.Images.Media._ID
             nameColumn = MediaStore.Images.Media.DISPLAY_NAME
             sizeColumn = MediaStore.Images.Media.SIZE
-            projection = arrayOf(idColumn, nameColumn, sizeColumn, MediaStore.Images.Media.DATA)
+            projection = arrayOf(idColumn, nameColumn, sizeColumn)
             selection = null
             selectionArgs = null
         } else {
@@ -530,7 +555,7 @@ class OptimizerViewModel(application: Application) : AndroidViewModel(applicatio
             nameColumn = MediaStore.Video.Media.DISPLAY_NAME
             sizeColumn = MediaStore.Video.Media.SIZE
             val durationColumn = MediaStore.Video.Media.DURATION
-            projection = arrayOf(idColumn, nameColumn, sizeColumn, durationColumn, MediaStore.Video.Media.DATA)
+            projection = arrayOf(idColumn, nameColumn, sizeColumn, durationColumn)
             selection = null
             selectionArgs = null
         }
@@ -551,14 +576,12 @@ class OptimizerViewModel(application: Application) : AndroidViewModel(applicatio
             val idIndex = cur.getColumnIndexOrThrow(idColumn)
             val nameIndex = cur.getColumnIndexOrThrow(nameColumn)
             val sizeIndex = cur.getColumnIndexOrThrow(sizeColumn)
-            val dataIndex = cur.getColumnIndex(MediaStore.Images.Media.DATA)
             val durationIndex = if (type == MediaType.VIDEO) cur.getColumnIndex(MediaStore.Video.Media.DURATION) else -1
 
             while (cur.moveToNext()) {
                 val id = cur.getLong(idIndex)
                 val name = cur.getString(nameIndex) ?: "Desconhecido"
                 val size = cur.getLong(sizeIndex)
-                val path = if (dataIndex != -1) cur.getString(dataIndex) else null
 
                 val sizeStr = formatSize(size)
                 val mediaUri = ContentUris.withAppendedId(uri, id)
@@ -579,7 +602,8 @@ class OptimizerViewModel(application: Application) : AndroidViewModel(applicatio
                         sizeBytes = size,
                         type = type,
                         durationStr = durationStr,
-                        path = path
+                        gradientColors = defaultGradient(),
+                        isMock = false
                     )
                 )
             }
@@ -607,11 +631,11 @@ class OptimizerViewModel(application: Application) : AndroidViewModel(applicatio
         if (filter == GalleryFilter.ALL || filter == GalleryFilter.PHOTOS) {
             items.addAll(
                 listOf(
-                    MediaItem(1, Uri.parse("https://images.unsplash.com/photo-1506744038136-46273834b3fb?w=800&q=80"), "IMG_20260515_WA0024.jpg", "24.2 MB", 24200000L, MediaType.PHOTO, gradientColors = gradients[0]),
-                    MediaItem(2, Uri.parse("https://images.unsplash.com/photo-1542751371-adc38448a05e?w=800&q=80"), "screenshot_20260520_1402.png", "15.8 MB", 15800000L, MediaType.PHOTO, gradientColors = gradients[1]),
-                    MediaItem(3, Uri.parse("https://images.unsplash.com/photo-1516035069371-29a1b244cc32?w=800&q=80"), "IMG_CAMERA_0029.jpg", "12.4 MB", 12400000L, MediaType.PHOTO, gradientColors = gradients[2]),
-                    MediaItem(4, Uri.parse("https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=800&q=80"), "whatsapp_cached_profile_9a.jpg", "8.9 MB", 8900000L, MediaType.PHOTO, gradientColors = gradients[3]),
-                    MediaItem(5, Uri.parse("https://images.unsplash.com/photo-1543466835-00a7907e9de1?w=800&q=80"), "telegram_sticker_temp_88.png", "6.2 MB", 6200000L, MediaType.PHOTO, gradientColors = gradients[4])
+                    MediaItem(1, Uri.parse("https://images.unsplash.com/photo-1506744038136-46273834b3fb?w=800&q=80"), "IMG_20260515_WA0024.jpg", "24.2 MB", 24200000L, MediaType.PHOTO, gradientColors = gradients[0], isMock = true),
+                    MediaItem(2, Uri.parse("https://images.unsplash.com/photo-1542751371-adc38448a05e?w=800&q=80"), "screenshot_20260520_1402.png", "15.8 MB", 15800000L, MediaType.PHOTO, gradientColors = gradients[1], isMock = true),
+                    MediaItem(3, Uri.parse("https://images.unsplash.com/photo-1516035069371-29a1b244cc32?w=800&q=80"), "IMG_CAMERA_0029.jpg", "12.4 MB", 12400000L, MediaType.PHOTO, gradientColors = gradients[2], isMock = true),
+                    MediaItem(4, Uri.parse("https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=800&q=80"), "whatsapp_cached_profile_9a.jpg", "8.9 MB", 8900000L, MediaType.PHOTO, gradientColors = gradients[3], isMock = true),
+                    MediaItem(5, Uri.parse("https://images.unsplash.com/photo-1543466835-00a7907e9de1?w=800&q=80"), "telegram_sticker_temp_88.png", "6.2 MB", 6200000L, MediaType.PHOTO, gradientColors = gradients[4], isMock = true)
                 )
             )
         }
@@ -620,9 +644,9 @@ class OptimizerViewModel(application: Application) : AndroidViewModel(applicatio
         if (filter == GalleryFilter.ALL || filter == GalleryFilter.VIDEOS) {
             items.addAll(
                 listOf(
-                    MediaItem(10, Uri.parse("https://images.unsplash.com/photo-1485846234645-a62644f84728?w=800&q=80"), "REC_CAM_TRIP_2026.mp4", "385.0 MB", 385000000L, MediaType.VIDEO, "02:45", gradientColors = gradients[5]),
-                    MediaItem(11, Uri.parse("https://images.unsplash.com/photo-1516280440614-37939bbacd6a?w=800&q=80"), "whatsapp_rec_message_7.mp4", "182.4 MB", 182400000L, MediaType.VIDEO, "01:12", gradientColors = gradients[6]),
-                    MediaItem(12, Uri.parse("https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=800&q=80"), "downloaded_tiktok_00412.mp4", "95.5 MB", 95500000L, MediaType.VIDEO, "00:30", gradientColors = gradients[7])
+                    MediaItem(10, Uri.parse("https://images.unsplash.com/photo-1485846234645-a62644f84728?w=800&q=80"), "REC_CAM_TRIP_2026.mp4", "385.0 MB", 385000000L, MediaType.VIDEO, "02:45", gradientColors = gradients[5], isMock = true),
+                    MediaItem(11, Uri.parse("https://images.unsplash.com/photo-1516280440614-37939bbacd6a?w=800&q=80"), "whatsapp_rec_message_7.mp4", "182.4 MB", 182400000L, MediaType.VIDEO, "01:12", gradientColors = gradients[6], isMock = true),
+                    MediaItem(12, Uri.parse("https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=800&q=80"), "downloaded_tiktok_00412.mp4", "95.5 MB", 95500000L, MediaType.VIDEO, "00:30", gradientColors = gradients[7], isMock = true)
                 )
             )
         }
@@ -659,14 +683,14 @@ class OptimizerViewModel(application: Application) : AndroidViewModel(applicatio
             
             val customUrl = _customUpdateUrl.value
             val finalUrl = customUrl.ifEmpty {
-                "https://raw.githubusercontent.com/AppStudioMock/turboclean/main/releases/turboclean-v1.1.apk"
+                "https://raw.githubusercontent.com/Ribino-Verdadeiro/TurboCleans/main/releases/turboclean-v1.1.apk"
             }
 
             val dynamicVersionName = if (customUrl.isNotEmpty()) "1.2.0 (Custom)" else "1.1.0"
             val dynamicChangelog = if (customUrl.isNotEmpty()) {
                 "• Compilação personalizada recebida do canal de teste informado.\n• URL de Origem: $finalUrl"
             } else {
-                "• Nova Varredura de Sistema Inteligente ultra veloz\n• Algoritmo de limpeza de fragmentação de banco local\n• Redução drástica de recomposições na galeria de Swipe\n• Novo tema de cor Cyberpunk Blue"
+                "• Nova Varredura de Sistema Inteligente ultra veloz\n• Sincronização oficial com repositório @Ribino-Verdadeiro\n• Algoritmo de limpeza de fragmentação de banco local\n• Redução drástica de recomposições na galeria de Swipe\n• Novo tema de cor Cyberpunk Blue"
             }
 
             _updateState.value = UpdateState.UpdateAvailable(
@@ -989,21 +1013,38 @@ class OptimizerViewModel(application: Application) : AndroidViewModel(applicatio
             delay(1500)
 
             val resolver = getApplication<Application>().contentResolver
-            var actuallyCleanedBytes = 0L
+            val actuallyCleanedBytes = selectedItems.sumOf { it.sizeBytes }
 
-            selectedItems.forEach { item ->
-                if (item.realUri != null) {
+            val realUris = selectedItems.mapNotNull { it.realUri }
+            if (realUris.isNotEmpty()) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                     try {
-                        resolver.delete(item.realUri, null, null)
-                        actuallyCleanedBytes += item.sizeBytes
+                        val pendingIntent = MediaStore.createDeleteRequest(resolver, realUris)
+                        _deletePendingIntent.emit(pendingIntent)
                     } catch (e: Exception) {
                         e.printStackTrace()
-                        // On Android 10+ sandbox block, we count it as cleared in UI listing to complete workflow without crash
-                        actuallyCleanedBytes += item.sizeBytes
+                    }
+                } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    realUris.forEach { uri ->
+                        try {
+                            resolver.delete(uri, null, null)
+                        } catch (e: SecurityException) {
+                            val recoverableSecurityException = e as? android.app.RecoverableSecurityException
+                            if (recoverableSecurityException != null) {
+                                _deletePendingIntent.emit(recoverableSecurityException.userAction.actionIntent)
+                            }
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
                     }
                 } else {
-                    // Simulation items
-                    actuallyCleanedBytes += item.sizeBytes
+                    realUris.forEach { uri ->
+                        try {
+                            resolver.delete(uri, null, null)
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+                    }
                 }
             }
 

@@ -93,9 +93,37 @@ fun MainAppScreen(
 
     val permissionState = rememberMultiplePermissionsState(permissions = permissionsToRequest)
 
+    val anyMediaGranted = remember(permissionState.allPermissionsGranted, permissionState.permissions) {
+        permissionState.allPermissionsGranted || permissionState.permissions.any {
+            it.status is com.google.accompanist.permissions.PermissionStatus.Granted
+        }
+    }
+
     // Notify VM when permission state updates
-    LaunchedEffect(permissionState.allPermissionsGranted) {
-        optimizerViewModel.setMediaPermissionGranted(permissionState.allPermissionsGranted)
+    LaunchedEffect(anyMediaGranted) {
+        optimizerViewModel.setMediaPermissionGranted(anyMediaGranted)
+    }
+
+    val deleteLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        if (result.resultCode == android.app.Activity.RESULT_OK) {
+            Toast.makeText(context, "Mídia apagada com sucesso!", Toast.LENGTH_SHORT).show()
+        } else {
+            Toast.makeText(context, "Exclusão cancelada ou não permitida", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // Collect delete requests emitted from VM
+    LaunchedEffect(Unit) {
+        optimizerViewModel.deletePendingIntent.collect { pendingIntent ->
+            try {
+                val intentSenderRequest = androidx.activity.result.IntentSenderRequest.Builder(pendingIntent).build()
+                deleteLauncher.launch(intentSenderRequest)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
     }
 
     // Modal/Dialog states
@@ -516,7 +544,7 @@ fun MainAppScreen(
                             viewModel = optimizerViewModel,
                             onStartSwipeCleaner = {
                                 // Request permissions or directly transition (with mock fallback handling embedded)
-                                if (permissionState.allPermissionsGranted) {
+                                if (anyMediaGranted) {
                                     showFilterDialog = true
                                 } else {
                                     // Trigger permission prompt

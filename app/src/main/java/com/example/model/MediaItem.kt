@@ -12,7 +12,8 @@ data class MediaItem(
     val type: MediaType,
     val durationStr: String? = null,
     val path: String? = null,
-    val gradientColors: List<Color> = defaultGradient()
+    val gradientColors: List<Color> = defaultGradient(),
+    val isMock: Boolean = false
 )
 
 enum class MediaType {
