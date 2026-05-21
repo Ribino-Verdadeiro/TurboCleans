@@ -83,7 +83,13 @@ fun MainAppScreen(
     var currentScreen by remember { mutableStateOf(ActiveScreen.DASHBOARD) }
 
     // Media permissions state handler (using accompanist permissions)
-    val permissionsToRequest = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+    val permissionsToRequest = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+        listOf(
+            Manifest.permission.READ_MEDIA_IMAGES,
+            Manifest.permission.READ_MEDIA_VIDEO,
+            Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED
+        )
+    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         listOf(
             Manifest.permission.READ_MEDIA_IMAGES,
             Manifest.permission.READ_MEDIA_VIDEO
@@ -107,6 +113,7 @@ fun MainAppScreen(
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 optimizerViewModel.updateAllFilesPermissionState()
+                optimizerViewModel.setMediaPermissionGranted(anyMediaGranted)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -416,15 +423,43 @@ fun MainAppScreen(
                         if (!state.isSimulation) {
                             OutlinedButton(
                                 onClick = {
-                                    val installIntent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
-                                        setDataAndType(state.apkFileUri, "application/vnd.android.package-archive")
-                                        addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                        addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    val canInstall = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                        context.packageManager.canRequestPackageInstalls()
+                                    } else {
+                                        true
                                     }
-                                    try {
-                                        context.startActivity(installIntent)
-                                    } catch (e: Exception) {
-                                        Toast.makeText(context, "Erro ao iniciar instalação: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+
+                                    if (!canInstall && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                        Toast.makeText(
+                                            context,
+                                            "Por favor, ative a permissão de fontes desconhecidas para o Turbo Clean nas configurações.",
+                                            Toast.LENGTH_LONG
+                                        ).show()
+                                        val settingsIntent = android.content.Intent(
+                                            android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                            android.net.Uri.parse("package:${context.packageName}")
+                                        ).apply {
+                                            addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        }
+                                        try {
+                                            context.startActivity(settingsIntent)
+                                        } catch (e: Exception) {
+                                            val genericSettingsIntent = android.content.Intent(android.provider.Settings.ACTION_SECURITY_SETTINGS).apply {
+                                                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                                            }
+                                            context.startActivity(genericSettingsIntent)
+                                        }
+                                    } else {
+                                        val installIntent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                                            setDataAndType(state.apkFileUri, "application/vnd.android.package-archive")
+                                            addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                            addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        }
+                                        try {
+                                            context.startActivity(installIntent)
+                                        } catch (e: Exception) {
+                                            Toast.makeText(context, "Erro ao iniciar instalação: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+                                        }
                                     }
                                 },
                                 border = BorderStroke(1.dp, CardBorder),
@@ -1828,6 +1863,51 @@ fun SwipeGalleryCleaner(
                     onSwipeRight = { viewModel.swipeRight(it) },
                     modifier = Modifier.padding(12.dp)
                 )
+
+                if (topItem.isMock) {
+                    Column(
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .padding(top = 16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .background(Color(0xFFE65100).copy(alpha = 0.15f), RoundedCornerShape(8.dp))
+                                .border(1.dp, Color(0xFFE65100), RoundedCornerShape(8.dp))
+                                .padding(horizontal = 12.dp, vertical = 6.dp)
+                        ) {
+                            Text(
+                                text = "Mídias de demonstração (Galeria vazia ou sem permissão)",
+                                color = Color(0xFFFFB74D),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Button(
+                            onClick = { viewModel.generateRealTestPhotos() },
+                            colors = ButtonDefaults.buttonColors(containerColor = PrimaryTeal),
+                            shape = RoundedCornerShape(12.dp),
+                            border = BorderStroke(1.dp, PrimaryTeal.copy(alpha = 0.5f))
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Refresh,
+                                contentDescription = null,
+                                tint = DarkBackground,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Gerar Fotos Reais de Teste",
+                                color = DarkBackground,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 12.sp
+                            )
+                        }
+                    }
+                }
 
                 if (pendingDeleteItems.isNotEmpty()) {
                     Row(

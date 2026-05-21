@@ -5,6 +5,10 @@ import android.app.ActivityManager
 import android.content.Context
 import android.content.ContentResolver
 import android.content.ContentUris
+import android.content.ContentValues
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
 import android.database.Cursor
 import android.net.Uri
 import android.os.Build
@@ -175,6 +179,41 @@ class OptimizerViewModel(application: Application) : AndroidViewModel(applicatio
     // Maps to track physically discovered files for each category
     private val filesToCleanMap = mutableMapOf<String, MutableList<File>>()
 
+    private val deletedMockIds = mutableSetOf<Long>()
+    private val deletedMockDeepCleanIds = mutableSetOf<String>()
+
+    private fun checkMediaPermission(): Boolean {
+        val context = getApplication<Application>()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && Environment.isExternalStorageManager()) {
+            return true
+        }
+        val hasWrite = androidx.core.content.ContextCompat.checkSelfPermission(
+            context, android.Manifest.permission.WRITE_EXTERNAL_STORAGE
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        if (hasWrite) return true
+
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val hasImages = androidx.core.content.ContextCompat.checkSelfPermission(
+                context, android.Manifest.permission.READ_MEDIA_IMAGES
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            val hasVideos = androidx.core.content.ContextCompat.checkSelfPermission(
+                context, android.Manifest.permission.READ_MEDIA_VIDEO
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            val hasPartial = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                androidx.core.content.ContextCompat.checkSelfPermission(
+                    context, android.Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED
+                ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            } else {
+                false
+            }
+            hasImages || hasVideos || hasPartial
+        } else {
+            androidx.core.content.ContextCompat.checkSelfPermission(
+                context, android.Manifest.permission.READ_EXTERNAL_STORAGE
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        }
+    }
+
     private val packageList = listOf(
         "com.android.chrome", "com.whatsapp", "com.instagram", "com.facebook.katana",
         "com.google.android.youtube", "org.telegram.messenger", "com.spotify.music",
@@ -186,8 +225,161 @@ class OptimizerViewModel(application: Application) : AndroidViewModel(applicatio
         // Initial configuration with real measurements & generate dummy caches on startup
         updateAllFilesPermissionState()
         generateRealAppCacheDummyFiles()
+        generateRealSandboxDeepCleanFiles()
         loadStorageStats()
         updateRamUsage()
+    }
+
+    private fun generateRealSandboxDeepCleanFiles() {
+        try {
+            val cacheDir = getApplication<Application>().cacheDir
+            if (!cacheDir.exists()) {
+                cacheDir.mkdirs()
+            }
+            val tcDeepCleanDir = File(cacheDir, "turboclean_deepclean")
+            if (!tcDeepCleanDir.exists()) {
+                tcDeepCleanDir.mkdirs()
+            }
+            val buffer = ByteArray(1024 * 8)
+
+            val file1 = File(tcDeepCleanDir, "large_system_payload_test.dat")
+            if (!file1.exists() || file1.length() == 0L) {
+                file1.createNewFile()
+                java.io.FileOutputStream(file1).use { fos ->
+                    for (i in 0 until (1024 * 25 / 8)) { // 25 MB
+                        fos.write(buffer)
+                    }
+                }
+            }
+
+            val file2 = File(tcDeepCleanDir, "temp_video_render_cache_7.dat")
+            if (!file2.exists() || file2.length() == 0L) {
+                file2.createNewFile()
+                java.io.FileOutputStream(file2).use { fos ->
+                    for (i in 0 until (1024 * 35 / 8)) { // 35 MB
+                        fos.write(buffer)
+                    }
+                }
+            }
+
+            val file3 = File(tcDeepCleanDir, "duplicate_log_backup_A.log")
+            if (!file3.exists() || file3.length() == 0L) {
+                file3.createNewFile()
+                java.io.FileOutputStream(file3).use { fos ->
+                    for (i in 0 until (1024 * 10 / 8)) { // 10 MB
+                        fos.write(buffer)
+                    }
+                }
+            }
+
+            val file4 = File(tcDeepCleanDir, "duplicate_log_backup_B.log")
+            if (!file4.exists() || file4.length() == 0L) {
+                file4.createNewFile()
+                java.io.FileOutputStream(file4).use { fos ->
+                    for (i in 0 until (1024 * 10 / 8)) { // 10 MB duplicate
+                        fos.write(buffer)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    fun generateRealTestPhotos() {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val context = getApplication<Application>()
+            val resolver = context.contentResolver
+            val colors = listOf(
+                android.graphics.Color.rgb(0, 180, 160), // Teal
+                android.graphics.Color.rgb(180, 0, 100), // Purple/Pink
+                android.graphics.Color.rgb(30, 30, 50)    // Dark Gray
+            )
+            
+            for (i in 1..3) {
+                try {
+                    val displayName = "TurboClean_Teste_Foto_$i.jpg"
+                    val contentValues = ContentValues().apply {
+                        put(MediaStore.Images.Media.DISPLAY_NAME, displayName)
+                        put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/TurboClean")
+                            put(MediaStore.Images.Media.IS_PENDING, 1)
+                        }
+                    }
+                    val imageUri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues)
+                    if (imageUri != null) {
+                        resolver.openOutputStream(imageUri).use { out ->
+                            if (out != null) {
+                                val bitmap = Bitmap.createBitmap(1080, 1080, Bitmap.Config.ARGB_8888)
+                                val canvas = Canvas(bitmap)
+                                
+                                // Draw background color
+                                val bgPaint = Paint().apply {
+                                    color = colors[i - 1]
+                                    style = Paint.Style.FILL
+                                }
+                                canvas.drawRect(0f, 0f, 1080f, 1080f, bgPaint)
+                                
+                                // Draw border
+                                val borderPaint = Paint().apply {
+                                    color = android.graphics.Color.WHITE
+                                    strokeWidth = 20f
+                                    style = Paint.Style.STROKE
+                                }
+                                canvas.drawRect(40f, 40f, 1040f, 1040f, borderPaint)
+                                
+                                // Draw main title
+                                val titlePaint = Paint().apply {
+                                    color = android.graphics.Color.WHITE
+                                    textSize = 70f
+                                    isFakeBoldText = true
+                                    textAlign = Paint.Align.CENTER
+                                    isAntiAlias = true
+                                }
+                                canvas.drawText("TURBO CLEAN", 540f, 400f, titlePaint)
+                                
+                                // Draw subtitle
+                                val subPaint = Paint().apply {
+                                    color = android.graphics.Color.LTGRAY
+                                    textSize = 45f
+                                    textAlign = Paint.Align.CENTER
+                                    isAntiAlias = true
+                                }
+                                canvas.drawText("Foto Real de Teste #$i", 540f, 520f, subPaint)
+                                
+                                // Draw description text
+                                val sizePaint = Paint().apply {
+                                    color = android.graphics.Color.rgb(0, 255, 180)
+                                    textSize = 38f
+                                    textAlign = Paint.Align.CENTER
+                                    isAntiAlias = true
+                                }
+                                canvas.drawText("Esta foto sera excluida de verdade do seu aparelho.", 540f, 650f, sizePaint)
+                                canvas.drawText("Verifique na sua Galeria de Imagens!", 540f, 720f, sizePaint)
+                                
+                                bitmap.compress(Bitmap.CompressFormat.JPEG, 85, out)
+                            }
+                        }
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            contentValues.clear()
+                            contentValues.put(MediaStore.Images.Media.IS_PENDING, 0)
+                            resolver.update(imageUri, contentValues, null, null)
+                        }
+
+                        // SAVE TO SHARED PREFERENCES!
+                        val prefs = context.getSharedPreferences("TurboCleanGeneratedPhotos", Context.MODE_PRIVATE)
+                        val uriSet = prefs.getStringSet("uris", emptySet())?.toMutableSet() ?: mutableSetOf()
+                        uriSet.add(imageUri.toString())
+                        prefs.edit().putStringSet("uris", uriSet).apply()
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+            // Reload the actual photos
+            loadMediaItems()
+        }
     }
 
     fun updateAllFilesPermissionState() {
@@ -258,12 +450,9 @@ class OptimizerViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun setMediaPermissionGranted(granted: Boolean) {
-        _hasMediaPermission.value = granted
-        if (granted) {
-            loadMediaItems()
-        } else {
-            loadMockMedia()
-        }
+        val actuallyGranted = granted || checkMediaPermission()
+        _hasMediaPermission.value = actuallyGranted
+        loadMediaItems()
     }
 
     private fun loadStorageStats() {
@@ -518,12 +707,15 @@ class OptimizerViewModel(application: Application) : AndroidViewModel(applicatio
                 _scanState.value = ScanState.Cleaning(index.toFloat() / selectedCategories.size.toFloat(), cat.name)
                 
                 if (cat.id == "apps_cache") {
-                    // Physical deletion of app's own cache folder
+                    // Physical deletion of app's own cache folder - ignoring turboclean_deepclean and database files
                     try {
                         val cacheDir = getApplication<Application>().cacheDir
                         val files = cacheDir.listFiles()
                         if (files != null) {
                             for (f in files) {
+                                if (f.name == "turboclean_deepclean" || f.name.endsWith(".db") || f.name.endsWith(".db-journal")) {
+                                    continue
+                                }
                                 f.deleteRecursively()
                             }
                         }
@@ -532,6 +724,9 @@ class OptimizerViewModel(application: Application) : AndroidViewModel(applicatio
                             val extFiles = extCacheDir.listFiles()
                             if (extFiles != null) {
                                 for (f in extFiles) {
+                                    if (f.name == "turboclean_deepclean" || f.name.endsWith(".db") || f.name.endsWith(".db-journal")) {
+                                        continue
+                                    }
                                     f.deleteRecursively()
                                 }
                             }
@@ -592,11 +787,9 @@ class OptimizerViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun setFilter(filter: GalleryFilter) {
         _currentFilter.value = filter
-        if (_hasMediaPermission.value) {
-            loadMediaItems()
-        } else {
-            loadMockMedia()
-        }
+        val granted = checkMediaPermission()
+        _hasMediaPermission.value = granted
+        loadMediaItems()
     }
 
     // Media swipe queue controls
@@ -623,47 +816,103 @@ class OptimizerViewModel(application: Application) : AndroidViewModel(applicatio
         val pending = _pendingDeleteItems.value
         if (pending.isEmpty()) return
 
-        val realUris = pending.filter { !it.isMock && _hasMediaPermission.value }.map { it.uri }
-        if (realUris.isEmpty()) {
-            // No real URIs to request delete, immediately finalize mock deletion
+        val realItems = pending.filter { !it.isMock }
+        if (realItems.isEmpty()) {
+            // No real items to request delete, immediately finalize mock deletion
             onConfirmDeleteResult(true)
             return
         }
 
-        viewModelScope.launch {
-            try {
-                val resolver = getApplication<Application>().contentResolver
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    val pendingIntent = MediaStore.createDeleteRequest(resolver, realUris)
-                    _deletePendingIntent.emit(pendingIntent)
-                } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    var permissionRequiredIntent: PendingIntent? = null
-                    realUris.forEach { uri ->
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val contentUris = mutableListOf<Uri>()
+            val physicalFiles = mutableListOf<File>()
+
+            realItems.forEach { item ->
+                val uri = item.uri
+                if (uri.scheme == "file") {
+                    val path = uri.path
+                    if (path != null) {
+                        physicalFiles.add(File(path))
+                    }
+                } else if (uri.scheme == "content") {
+                    contentUris.add(uri)
+                } else {
+                    val path = item.path
+                    if (path != null) {
+                        physicalFiles.add(File(path))
+                    } else {
+                        contentUris.add(uri)
+                    }
+                }
+            }
+
+            // Physically delete files on IO thread
+            physicalFiles.forEach { file ->
+                try {
+                    if (file.exists()) {
+                        file.delete()
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+
+            // Delete content URIs via MediaStore/ContentResolver
+            if (contentUris.isNotEmpty()) {
+                try {
+                    val resolver = getApplication<Application>().contentResolver
+                    
+                    // Try to delete directly first (succeeds without permissions for app's own files on Android 10+)
+                    val remainingUris = mutableListOf<Uri>()
+                    contentUris.forEach { uri ->
                         try {
-                            resolver.delete(uri, null, null)
-                        } catch (securityException: SecurityException) {
-                            val recoverableSecurityException = securityException as? android.app.RecoverableSecurityException
-                            if (recoverableSecurityException != null) {
-                                permissionRequiredIntent = recoverableSecurityException.userAction.actionIntent
-                            } else {
-                                throw securityException
+                            val deleted = resolver.delete(uri, null, null)
+                            if (deleted <= 0) {
+                                remainingUris.add(uri)
                             }
+                        } catch (e: Exception) {
+                            remainingUris.add(uri)
                         }
                     }
-                    if (permissionRequiredIntent != null) {
-                        _deletePendingIntent.emit(permissionRequiredIntent!!)
+
+                    if (remainingUris.isNotEmpty()) {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                            val pendingIntent = MediaStore.createDeleteRequest(resolver, remainingUris)
+                            _deletePendingIntent.emit(pendingIntent)
+                        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            var permissionRequiredIntent: PendingIntent? = null
+                            remainingUris.forEach { uri ->
+                                try {
+                                    resolver.delete(uri, null, null)
+                                } catch (securityException: SecurityException) {
+                                    val recoverableSecurityException = securityException as? android.app.RecoverableSecurityException
+                                    if (recoverableSecurityException != null) {
+                                        permissionRequiredIntent = recoverableSecurityException.userAction.actionIntent
+                                    } else {
+                                        throw securityException
+                                    }
+                                }
+                            }
+                            if (permissionRequiredIntent != null) {
+                                _deletePendingIntent.emit(permissionRequiredIntent!!)
+                            } else {
+                                onConfirmDeleteResult(true)
+                            }
+                        } else {
+                            remainingUris.forEach { uri ->
+                                resolver.delete(uri, null, null)
+                            }
+                            onConfirmDeleteResult(true)
+                        }
                     } else {
                         onConfirmDeleteResult(true)
                     }
-                } else {
-                    realUris.forEach { uri ->
-                        resolver.delete(uri, null, null)
-                    }
-                    onConfirmDeleteResult(true)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                    onConfirmDeleteResult(false)
                 }
-            } catch (e: Exception) {
-                e.printStackTrace()
-                onConfirmDeleteResult(false)
+            } else {
+                onConfirmDeleteResult(true)
             }
         }
     }
@@ -676,16 +925,39 @@ class OptimizerViewModel(application: Application) : AndroidViewModel(applicatio
                     val totalSize = _pendingDeleteItems.value.sumOf { it.sizeBytes }
                     _deletedCount.value += count
                     _deletedFilesSizeSum.value += totalSize
-                    _pendingDeleteItems.value = emptyList()
-                    if (_hasMediaPermission.value) {
-                        loadMediaItems()
+                    
+                    // Track deleted IDs so they don't reappear, and also remove from SharedPreferences
+                    val context = getApplication<Application>()
+                    val prefs = context.getSharedPreferences("TurboCleanGeneratedPhotos", Context.MODE_PRIVATE)
+                    val savedUriStrings = prefs.getStringSet("uris", emptySet())?.toMutableSet() ?: mutableSetOf()
+                    
+                    _pendingDeleteItems.value.forEach { item ->
+                        deletedMockIds.add(item.id)
+                        savedUriStrings.remove(item.uri.toString())
                     }
+                    prefs.edit().putStringSet("uris", savedUriStrings).apply()
+                    
+                    _pendingDeleteItems.value = emptyList()
+                    val granted = checkMediaPermission()
+                    _hasMediaPermission.value = granted
+                    loadMediaItems()
                 } else {
                     rollbackPendingDeletions()
                 }
             } else if (lastDeleteOrigin == DeleteOrigin.DEEP_CLEAN) {
                 if (success) {
                     val actuallyCleanedBytes = pendingDeepCleanItems.sumOf { it.sizeBytes }
+                    
+                    // Track deleted mock deep clean IDs so they don't reappear on rescans
+                    pendingDeepCleanItems.forEach { item ->
+                        if (item.id.startsWith("dc_")) {
+                            deletedMockDeepCleanIds.add(item.id)
+                        } else {
+                            // Also track physical/real files deleted in deep clean
+                            deletedMockDeepCleanIds.add(item.id)
+                        }
+                    }
+                    
                     scannedDeepItems.removeAll(pendingDeepCleanItems)
                     _deepCleanState.value = DeepCleanState.CleanCompleted(
                         totalCleanedBytes = actuallyCleanedBytes,
@@ -702,31 +974,141 @@ class OptimizerViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     // Modern media file queries via MediaStore
+    private fun scanPhysicalGalleryFoldersRecursively(folder: File, resultList: MutableList<MediaItem>) {
+        if (!folder.exists()) return
+        val files = try { folder.listFiles() } catch (e: Exception) { null } ?: return
+        for (file in files) {
+            if (file.isDirectory) {
+                if (file.name.equals("Android", ignoreCase = true)) continue
+                scanPhysicalGalleryFoldersRecursively(file, resultList)
+            } else {
+                val name = file.name.lowercase(Locale.getDefault())
+                val isPhoto = name.endsWith(".jpg") || name.endsWith(".jpeg") || name.endsWith(".png") || name.endsWith(".webp") || name.endsWith(".gif") || name.endsWith(".heic") || name.endsWith(".heif")
+                val isVideo = name.endsWith(".mp4") || name.endsWith(".mkv") || name.endsWith(".3gp") || name.endsWith(".webm") || name.endsWith(".avi")
+                if (isPhoto || isVideo) {
+                    val type = if (isPhoto) MediaType.PHOTO else MediaType.VIDEO
+                    val filter = _currentFilter.value
+                    if (filter == GalleryFilter.ALL || (filter == GalleryFilter.PHOTOS && isPhoto) || (filter == GalleryFilter.VIDEOS && isVideo)) {
+                        val size = file.length()
+                        resultList.add(
+                            MediaItem(
+                                id = file.absolutePath.hashCode().toLong(),
+                                uri = Uri.fromFile(file),
+                                name = file.name,
+                                sizeStr = formatSize(size),
+                                sizeBytes = size,
+                                type = type,
+                                path = file.absolutePath,
+                                gradientColors = defaultGradient(),
+                                isMock = false
+                            )
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    // Modern media file queries via MediaStore
     private fun loadMediaItems() {
         viewModelScope.launch {
-            val itemsList = mutableListOf<MediaItem>()
-            val contentResolver = getApplication<Application>().contentResolver
+            val granted = checkMediaPermission()
+            _hasMediaPermission.value = granted
 
+            val context = getApplication<Application>()
+            val prefs = context.getSharedPreferences("TurboCleanGeneratedPhotos", Context.MODE_PRIVATE)
+            val savedUriStrings = prefs.getStringSet("uris", emptySet()) ?: emptySet()
+            val trackedGeneratedItems = mutableListOf<MediaItem>()
+            val activeSavedUriStrings = savedUriStrings.toMutableSet()
+            var generatedChanged = false
+
+            savedUriStrings.forEach { uriStr ->
+                try {
+                    val uri = Uri.parse(uriStr)
+                    var exists = false
+                    var sizeBytes = 1572864L
+                    
+                    try {
+                        context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                            sizeBytes = pfd.statSize
+                            exists = true
+                        }
+                    } catch (e: java.io.FileNotFoundException) {
+                        exists = false
+                    } catch (e: SecurityException) {
+                        exists = true
+                    } catch (e: Exception) {
+                        exists = true
+                    }
+                    
+                    if (exists) {
+                        val id = try { ContentUris.parseId(uri) } catch (e: Exception) { uriStr.hashCode().toLong() }
+                        trackedGeneratedItems.add(
+                            MediaItem(
+                                id = id,
+                                uri = uri,
+                                name = "TurboClean_Teste_Foto_$id.jpg",
+                                sizeStr = formatSize(sizeBytes),
+                                sizeBytes = sizeBytes,
+                                type = MediaType.PHOTO,
+                                gradientColors = defaultGradient(),
+                                isMock = false
+                            )
+                        )
+                    } else {
+                        activeSavedUriStrings.remove(uriStr)
+                        generatedChanged = true
+                    }
+                } catch (e: Exception) {
+                }
+            }
+            if (generatedChanged) {
+                prefs.edit().putStringSet("uris", activeSavedUriStrings).apply()
+            }
+
+            val itemsList = mutableListOf<MediaItem>()
+            val contentResolver = context.contentResolver
             val filter = _currentFilter.value
 
             if (filter == GalleryFilter.ALL || filter == GalleryFilter.PHOTOS) {
-                val photoItems = queryMediaStore(contentResolver, MediaType.PHOTO)
-                itemsList.addAll(photoItems)
+                if (granted) {
+                    val photoItems = queryMediaStore(contentResolver, MediaType.PHOTO)
+                    itemsList.addAll(photoItems)
+                } else {
+                    itemsList.addAll(trackedGeneratedItems)
+                }
             }
 
             if (filter == GalleryFilter.ALL || filter == GalleryFilter.VIDEOS) {
-                val videoItems = queryMediaStore(contentResolver, MediaType.VIDEO)
-                itemsList.addAll(videoItems)
+                if (granted) {
+                    val videoItems = queryMediaStore(contentResolver, MediaType.VIDEO)
+                    itemsList.addAll(videoItems)
+                }
             }
 
-            // Sort by heaviest first ("o que está mais pesando no celular")!
-            itemsList.sortByDescending { it.sizeBytes }
+            // Fallback: Physical scan of standard folders if MediaStore is empty but we have files permission
+            if (itemsList.isEmpty() && _hasAllFilesPermission.value) {
+                val rootDir = Environment.getExternalStorageDirectory()
+                val dcimDir = File(rootDir, "DCIM")
+                val picturesDir = File(rootDir, "Pictures")
+                val downloadDir = File(rootDir, "Download")
+                val physicalItems = mutableListOf<MediaItem>()
+                scanPhysicalGalleryFoldersRecursively(dcimDir, physicalItems)
+                scanPhysicalGalleryFoldersRecursively(picturesDir, physicalItems)
+                scanPhysicalGalleryFoldersRecursively(downloadDir, physicalItems)
+                itemsList.addAll(physicalItems)
+            }
 
-            if (itemsList.isEmpty()) {
+            // Sort by heaviest first and filter deleted
+            val activeItemsList = itemsList.filter { !deletedMockIds.contains(it.id) }
+            val sortedList = activeItemsList.toMutableList()
+            sortedList.sortByDescending { it.sizeBytes }
+
+            if (sortedList.isEmpty()) {
                 // Return gorgeous mocks if the actual gallery has zero media! This prevents a "dead empty state"
                 loadMockMedia()
             } else {
-                _mediaQueue.value = itemsList
+                _mediaQueue.value = sortedList
             }
         }
     }
@@ -854,7 +1236,10 @@ class OptimizerViewModel(application: Application) : AndroidViewModel(applicatio
 
         // Sort mock items size descending
         items.sortByDescending { it.sizeBytes }
-        _mediaQueue.value = items
+
+        // Filter out deleted mock items
+        val activeItems = items.filter { !deletedMockIds.contains(it.id) }
+        _mediaQueue.value = activeItems
     }
 
     // Helper functions for formatting
@@ -1145,6 +1530,67 @@ class OptimizerViewModel(application: Application) : AndroidViewModel(applicatio
 
             val realAndMockList = mutableListOf<DeepCleanFile>()
 
+            // 0. Physical deep scan of our local sandbox directory (no permissions required!)
+            try {
+                val cacheDir = getApplication<Application>().cacheDir
+                val tcDeepCleanDir = File(cacheDir, "turboclean_deepclean")
+                if (tcDeepCleanDir.exists()) {
+                    val files = tcDeepCleanDir.listFiles()
+                    if (files != null) {
+                        // Find duplicate files by size to list them in the "duplicates" category
+                        val sizeMap = mutableMapOf<Long, MutableList<File>>()
+                        files.forEach { file ->
+                            if (file.isFile && !deletedMockDeepCleanIds.contains("sandbox_${file.name}")) {
+                                val size = file.length()
+                                val list = sizeMap.getOrPut(size) { mutableListOf() }
+                                list.add(file)
+                            }
+                        }
+
+                        files.forEach { file ->
+                            if (file.isFile) {
+                                val id = "sandbox_${file.name}"
+                                if (!deletedMockDeepCleanIds.contains(id)) {
+                                    val size = file.length()
+                                    val isDuplicate = (sizeMap[size]?.size ?: 0) > 1
+                                    
+                                    val category = if (isDuplicate) {
+                                        "duplicates"
+                                    } else if (file.name.contains("video", ignoreCase = true)) {
+                                        "large_media"
+                                    } else if (file.name.contains("system", ignoreCase = true)) {
+                                        "residual"
+                                    } else {
+                                        "downloads"
+                                    }
+
+                                    val desc = if (isDuplicate) {
+                                        "Clone idêntico detectado no cache local."
+                                    } else {
+                                        "Arquivo grande temporário em: cache/turboclean_deepclean"
+                                    }
+
+                                    realAndMockList.add(
+                                        DeepCleanFile(
+                                            id = id,
+                                            name = file.name,
+                                            sizeBytes = size,
+                                            sizeStr = formatSize(size),
+                                            category = category,
+                                            description = desc,
+                                            isSelected = true,
+                                            realUri = Uri.fromFile(file)
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+
             // 1. Physical deep scan if Full Files permission is active
             if (_hasAllFilesPermission.value) {
                 try {
@@ -1156,18 +1602,21 @@ class OptimizerViewModel(application: Application) : AndroidViewModel(applicatio
                     // Add large files
                     largeFiles.take(8).forEach { file ->
                         val cat = if (file.name.lowercase(Locale.getDefault()).endsWith(".apk")) "downloads" else "residual"
-                        realAndMockList.add(
-                            DeepCleanFile(
-                                id = "phys_large_${file.absolutePath.hashCode()}",
-                                name = file.name,
-                                sizeBytes = file.length(),
-                                sizeStr = formatSize(file.length()),
-                                category = cat,
-                                description = "Localizado em: ${file.parentFile?.name ?: "armazenamento"}",
-                                isSelected = false,
-                                realUri = Uri.fromFile(file)
+                        val id = "phys_large_${file.absolutePath.hashCode()}"
+                        if (!deletedMockDeepCleanIds.contains(id)) {
+                            realAndMockList.add(
+                                DeepCleanFile(
+                                    id = id,
+                                    name = file.name,
+                                    sizeBytes = file.length(),
+                                    sizeStr = formatSize(file.length()),
+                                    category = cat,
+                                    description = "Localizado em: ${file.parentFile?.name ?: "armazenamento"}",
+                                    isSelected = false,
+                                    realUri = Uri.fromFile(file)
+                                )
                             )
-                        )
+                        }
                     }
 
                     // Add duplicates
@@ -1175,19 +1624,22 @@ class OptimizerViewModel(application: Application) : AndroidViewModel(applicatio
                     allFilesMap.filter { it.value.size > 1 }.forEach { (_, files) ->
                         if (addedDupsCount < 8) {
                             files.forEach { file ->
-                                realAndMockList.add(
-                                    DeepCleanFile(
-                                        id = "phys_dup_${file.absolutePath.hashCode()}",
-                                        name = file.name,
-                                        sizeBytes = file.length(),
-                                        sizeStr = formatSize(file.length()),
-                                        category = "duplicates",
-                                        description = "Clone idêntico em: ${file.parentFile?.name ?: "armazenamento"}",
-                                        isSelected = false,
-                                        realUri = Uri.fromFile(file)
+                                val id = "phys_dup_${file.absolutePath.hashCode()}"
+                                if (!deletedMockDeepCleanIds.contains(id)) {
+                                    realAndMockList.add(
+                                        DeepCleanFile(
+                                            id = id,
+                                            name = file.name,
+                                            sizeBytes = file.length(),
+                                            sizeStr = formatSize(file.length()),
+                                            category = "duplicates",
+                                            description = "Clone idêntico em: ${file.parentFile?.name ?: "armazenamento"}",
+                                            isSelected = false,
+                                            realUri = Uri.fromFile(file)
+                                        )
                                     )
-                                )
-                                addedDupsCount++
+                                    addedDupsCount++
+                                }
                             }
                         }
                     }
@@ -1206,11 +1658,11 @@ class OptimizerViewModel(application: Application) : AndroidViewModel(applicatio
 
                     val heavyFiles = allMedia.filter { it.sizeBytes > 8 * 1024 * 1024L }
                     heavyFiles.take(4).forEach { media ->
-                        // Prevent adding same file twice
-                        if (realAndMockList.none { it.name == media.name }) {
+                        val id = "real_media_${media.id}"
+                        if (!deletedMockDeepCleanIds.contains(id) && realAndMockList.none { it.name == media.name }) {
                             realAndMockList.add(
                                 DeepCleanFile(
-                                    id = "real_media_${media.id}",
+                                    id = id,
                                     name = media.name,
                                     sizeBytes = media.sizeBytes,
                                     sizeStr = media.sizeStr,
@@ -1228,10 +1680,11 @@ class OptimizerViewModel(application: Application) : AndroidViewModel(applicatio
                     sizeGroups.forEach { (_, items) ->
                         if (addedMediaDupsCount < 3) {
                             items.forEach { media ->
-                                if (realAndMockList.none { it.name == media.name }) {
+                                val id = "real_dup_${media.id}"
+                                if (!deletedMockDeepCleanIds.contains(id) && realAndMockList.none { it.name == media.name }) {
                                     realAndMockList.add(
                                         DeepCleanFile(
-                                            id = "real_dup_${media.id}",
+                                            id = id,
                                             name = media.name,
                                             sizeBytes = media.sizeBytes,
                                             sizeStr = media.sizeStr,
@@ -1252,7 +1705,7 @@ class OptimizerViewModel(application: Application) : AndroidViewModel(applicatio
             }
 
             // Always add illustratively awesome premium cyber-simulations so the screen has visual excellence
-            if (realAndMockList.none { it.name == "whatsapp_backup_old_2025.zip" }) {
+            if (!deletedMockDeepCleanIds.contains("dc_1") && realAndMockList.none { it.name == "whatsapp_backup_old_2025.zip" }) {
                 realAndMockList.add(
                     DeepCleanFile(
                         id = "dc_1",
@@ -1265,7 +1718,7 @@ class OptimizerViewModel(application: Application) : AndroidViewModel(applicatio
                     )
                 )
             }
-            if (realAndMockList.none { it.name == "android_compile_sdk_temp_archive.tar.gz" }) {
+            if (!deletedMockDeepCleanIds.contains("dc_4") && realAndMockList.none { it.name == "android_compile_sdk_temp_archive.tar.gz" }) {
                 realAndMockList.add(
                     DeepCleanFile(
                         id = "dc_4",
